@@ -1,0 +1,5 @@
+../uart_data_gen.v
+../uart_rx.v
+../uart_top.v
+../uart_tx.v
+tb_uart.v
