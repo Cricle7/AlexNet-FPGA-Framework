@@ -36,14 +36,14 @@ module QuantizedConvReLU2d #(
     output reg                          conv_valid
 );
 
-    // 内部参数计算
+    // 内部参数
     localparam INPUT_SIZE = INPUT_CHANNELS * INPUT_HEIGHT * INPUT_WIDTH;
     localparam WEIGHT_SIZE = OUTPUT_CHANNELS * INPUT_CHANNELS * KERNEL_SIZE * KERNEL_SIZE;
-    // RAM 读地址寄存器
-    reg [$clog2(INPUT_SIZE)-1:0] input_data_addr_read;
-    reg [$clog2(WEIGHT_SIZE)-1:0] weight_data_addr_read;
-    reg [$clog2(OUTPUT_CHANNELS)-1:0] bias_data_addr_read;
 
+    // RAM 读地址寄存器
+    reg [$clog2(INPUT_SIZE)-1:0]   input_data_addr_read;
+    reg [$clog2(WEIGHT_SIZE)-1:0]  weight_data_addr_read;
+    reg [$clog2(OUTPUT_CHANNELS)-1:0] bias_data_addr_read;
 
     // 输入特征图 RAM
     reg [7:0] input_feature_map [0:INPUT_SIZE-1];
@@ -75,17 +75,13 @@ module QuantizedConvReLU2d #(
         bias_data_out <= biases[bias_data_addr_read]; // 同步读取
     end
 
-    // 卷积计算寄存器
+    // 内部寄存器
     reg [7:0]  row, col;
     reg [7:0]  kernel_row, kernel_col;
     reg [7:0]  output_channel;
-    reg [7:0]  input_channel;
     reg [31:0] acc;
     reg        processing;
 
-    wire [31:0] scaled_result_temp;
-
-    assign scaled_result_temp = ((acc * SCALE) >> 26) + ZERO_POINT;
     // 状态机状态
     reg [2:0] state;
     localparam IDLE      = 3'd0;
@@ -97,9 +93,13 @@ module QuantizedConvReLU2d #(
     localparam CALC_NEXT = 3'd6;
     localparam DONE      = 3'd7;
 
+    // 缩放结果计算
+    wire [31:0] scaled_result_temp;
+    assign scaled_result_temp = ((acc * SCALE) >> 26) + ZERO_POINT;
+
     always @(posedge clk or negedge rstn) begin
         if (!rstn) begin
-            // 初始化
+            // 初始化寄存器和状态
             state           <= IDLE;
             done            <= 0;
             conv_valid      <= 0;
@@ -110,115 +110,91 @@ module QuantizedConvReLU2d #(
             kernel_row      <= 0;
             kernel_col      <= 0;
             output_channel  <= 0;
-            input_channel   <= 0;
             acc             <= 0;
-            input_data_addr_read <= 0;
+            input_data_addr_read  <= 0;
             weight_data_addr_read <= 0;
-            bias_data_addr_read <= 0;
+            bias_data_addr_read   <= 0;
         end else begin
             case (state)
                 IDLE: begin
+                    done       <= 0;
+                    conv_valid <= 0;
                     if (start) begin
                         processing      <= 1;
-                        done            <= 0;
-                        conv_valid      <= 0;
                         row             <= 0;
                         col             <= 0;
                         kernel_row      <= 0;
                         kernel_col      <= 0;
                         output_channel  <= 0;
-                        input_channel   <= 0;
                         acc             <= 0;
+                        // 加载偏置地址
                         bias_data_addr_read <= output_channel;
                         state           <= LOAD_BIAS;
                     end
                 end
 
                 LOAD_BIAS: begin
-                    // 偏置已在上一个周期读取到 bias_data_out
+                    // 等待偏置数据准备好
+                    state <= WAIT;
+                end
+
+                WAIT: begin
+                    // 将偏置加载到累加器
                     acc <= bias_data_out;
-                    // 设置初始读地址
-                    input_data_addr_read <= input_channel * INPUT_HEIGHT * INPUT_WIDTH +
-                                            (row + kernel_row) * INPUT_WIDTH + (col + kernel_col);
-                    weight_data_addr_read <= output_channel * INPUT_CHANNELS * KERNEL_SIZE * KERNEL_SIZE +
-                                             input_channel * KERNEL_SIZE * KERNEL_SIZE +
+                    // 设置初始输入和权重读地址
+                    input_data_addr_read <= (row + kernel_row) * INPUT_WIDTH + (col + kernel_col);
+                    weight_data_addr_read <= output_channel * KERNEL_SIZE * KERNEL_SIZE +
                                              kernel_row * KERNEL_SIZE + kernel_col;
                     state <= CALC;
                 end
 
                 CALC: begin
-                    // 使用先前读取的数据进行计算
+                    // 执行乘累加运算
                     acc <= acc + input_data_out * weight_data_out;
-                    // 更新读地址
-                    if (input_channel < INPUT_CHANNELS - 1) begin
-                        input_channel <= input_channel + 1;
-                        input_data_addr_read <= (input_channel + 1) * INPUT_HEIGHT * INPUT_WIDTH +
-                                                (row + kernel_row) * INPUT_WIDTH + (col + kernel_col);
-                        weight_data_addr_read <= output_channel * INPUT_CHANNELS * KERNEL_SIZE * KERNEL_SIZE +
-                                                 (input_channel + 1) * KERNEL_SIZE * KERNEL_SIZE +
-                                                 kernel_row * KERNEL_SIZE + kernel_col;
-                        state <= WAIT;
+                    // 更新内核索引
+                    if (kernel_col < KERNEL_SIZE - 1) begin
+                        kernel_col <= kernel_col + 1;
                     end else begin
-                        input_channel <= 0;
-                        if (kernel_col < KERNEL_SIZE - 1) begin
-                            kernel_col <= kernel_col + 1;
-                            input_data_addr_read <= input_channel * INPUT_HEIGHT * INPUT_WIDTH +
-                                                    (row + kernel_row) * INPUT_WIDTH + (col + kernel_col + 1);
-                            weight_data_addr_read <= output_channel * INPUT_CHANNELS * KERNEL_SIZE * KERNEL_SIZE +
-                                                     input_channel * KERNEL_SIZE * KERNEL_SIZE +
-                                                     kernel_row * KERNEL_SIZE + (kernel_col + 1);
-                            state <= WAIT;
+                        kernel_col <= 0;
+                        if (kernel_row < KERNEL_SIZE - 1) begin
+                            kernel_row <= kernel_row + 1;
                         end else begin
-                            kernel_col <= 0;
-                            if (kernel_row < KERNEL_SIZE - 1) begin
-                                kernel_row <= kernel_row + 1;
-                                input_data_addr_read <= input_channel * INPUT_HEIGHT * INPUT_WIDTH +
-                                                        (row + kernel_row + 1) * INPUT_WIDTH + (col + kernel_col);
-                                weight_data_addr_read <= output_channel * INPUT_CHANNELS * KERNEL_SIZE * KERNEL_SIZE +
-                                                         input_channel * KERNEL_SIZE * KERNEL_SIZE +
-                                                         (kernel_row + 1) * KERNEL_SIZE + kernel_col;
-                                state <= WAIT;
-                            end else begin
-                                // 一个位置的卷积计算完成
-                                state <= WRITE;
-                            end
+                            kernel_row <= 0;
+                            // 一个位置的卷积计算完成
+                            state <= WRITE;
                         end
                     end
+                    // 更新下一个数据的读地址
+                    input_data_addr_read <= (row + kernel_row) * INPUT_WIDTH + (col + kernel_col);
+                    weight_data_addr_read <= output_channel * KERNEL_SIZE * KERNEL_SIZE +
+                                             kernel_row * KERNEL_SIZE + kernel_col;
                 end
 
-                WAIT: begin
-                    // 等待 RAM 读数据准备就绪
-                    state <= CALC;
-                end
                 WRITE: begin
-                        // 应用 ReLU 和裁剪
-                        if (scaled_result_temp[31] == 1) begin
-                            conv_result <= 8'd0;
-                        end else if (scaled_result_temp > 8'd255) begin
-                            conv_result <= 8'd255;
-                        end else begin
-                            conv_result <= scaled_result_temp[7:0];
-                        end
-                        // 准备在下一个状态拉高 conv_valid
-                        state <= OUTPUT;
+                    // 计算 conv_result
+                    if (scaled_result_temp[31] == 1) begin
+                        conv_result <= 8'd0;
+                    end else if (scaled_result_temp > 8'd255) begin
+                        conv_result <= 8'd255;
+                    end else begin
+                        conv_result <= scaled_result_temp[7:0];
                     end
+                    // 准备在下一个状态拉高 conv_valid
+                    state <= OUTPUT;
+                end
 
                 OUTPUT: begin
                     conv_valid <= 1; // 拉高 conv_valid
-
-                    // 在下一个周期拉低 conv_valid 并准备下一次计算
                     state <= CALC_NEXT;
                 end
 
                 CALC_NEXT: begin
                     conv_valid <= 0; // 拉低 conv_valid
-
-                    // 准备下一个计算
+                    // 重置累加器和索引
                     acc <= 0;
-                    input_channel <= 0;
                     kernel_row <= 0;
                     kernel_col <= 0;
-
+                    // 更新列和行索引
                     if (col < INPUT_WIDTH - KERNEL_SIZE) begin
                         col <= col + 1;
                     end else begin
@@ -237,17 +213,17 @@ module QuantizedConvReLU2d #(
                             end
                         end
                     end
-                    // 更新偏置读取地址
+                    // 更新下一个输出通道的偏置地址
                     bias_data_addr_read <= output_channel;
-                    // 准备下一个位置的计算
-                    state <= LOAD_BIAS;
+                    // 准备下一个计算
+                    if (state != DONE) begin
+                        state <= LOAD_BIAS;
+                    end
                 end
-                            
 
                 DONE: begin
-                    // 卷积过程完成
-                    processing <= 0;
-                    state <= IDLE;
+                    // 保持在 DONE 状态，直到复位
+                    done <= 1;
                 end
 
                 default: state <= IDLE;
