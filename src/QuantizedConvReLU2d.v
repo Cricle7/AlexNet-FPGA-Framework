@@ -179,12 +179,7 @@ module QuantizedConvReLU2d #(
                     end else begin
                         conv_result <= scaled_result_temp[7:0];
                     end
-                    // 准备在下一个状态拉高 conv_valid
-                    state <= OUTPUT;
-                end
-
-                OUTPUT: begin
-                    conv_valid <= 1; // 拉高 conv_valid
+                    conv_valid <= 1;
                     state <= CALC_NEXT;
                 end
 
@@ -222,8 +217,8 @@ module QuantizedConvReLU2d #(
                 end
 
                 DONE: begin
-                    // 保持在 DONE 状态，直到复位
                     done <= 1;
+                    state <= IDLE;
                 end
 
                 default: state <= IDLE;
