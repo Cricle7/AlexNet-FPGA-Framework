@@ -103,31 +103,27 @@ module QuantizedConvReLU2d #(
             state           <= IDLE;
             done            <= 0;
             conv_valid      <= 0;
-            conv_result     <= 0;
             processing      <= 0;
+            output_channel  <= 0;
             row             <= 0;
             col             <= 0;
+            acc             <= 0;
             kernel_row      <= 0;
             kernel_col      <= 0;
-            output_channel  <= 0;
-            acc             <= 0;
-            input_data_addr_read  <= 0;
-            weight_data_addr_read <= 0;
-            bias_data_addr_read   <= 0;
+            bias_data_addr_read <= 0;
         end else begin
             case (state)
                 IDLE: begin
-                    done       <= 0;
+                    done <= 0;
                     conv_valid <= 0;
                     if (start) begin
                         processing      <= 1;
+                        output_channel  <= 0;
                         row             <= 0;
                         col             <= 0;
+                        acc             <= 0;
                         kernel_row      <= 0;
                         kernel_col      <= 0;
-                        output_channel  <= 0;
-                        acc             <= 0;
-                        // 加载偏置地址
                         bias_data_addr_read <= output_channel;
                         state           <= LOAD_BIAS;
                     end
@@ -144,7 +140,7 @@ module QuantizedConvReLU2d #(
                     // 设置初始输入和权重读地址
                     input_data_addr_read <= (row + kernel_row) * INPUT_WIDTH + (col + kernel_col);
                     weight_data_addr_read <= output_channel * KERNEL_SIZE * KERNEL_SIZE +
-                                             kernel_row * KERNEL_SIZE + kernel_col;
+                                            kernel_row * KERNEL_SIZE + kernel_col;
                     state <= CALC;
                 end
 
@@ -159,7 +155,6 @@ module QuantizedConvReLU2d #(
                         if (kernel_row < KERNEL_SIZE - 1) begin
                             kernel_row <= kernel_row + 1;
                         end else begin
-                            kernel_row <= 0;
                             // 一个位置的卷积计算完成
                             state <= WRITE;
                         end
@@ -167,7 +162,7 @@ module QuantizedConvReLU2d #(
                     // 更新下一个数据的读地址
                     input_data_addr_read <= (row + kernel_row) * INPUT_WIDTH + (col + kernel_col);
                     weight_data_addr_read <= output_channel * KERNEL_SIZE * KERNEL_SIZE +
-                                             kernel_row * KERNEL_SIZE + kernel_col;
+                                            kernel_row * KERNEL_SIZE + kernel_col;
                 end
 
                 WRITE: begin
@@ -179,7 +174,7 @@ module QuantizedConvReLU2d #(
                     end else begin
                         conv_result <= scaled_result_temp[7:0];
                     end
-                    conv_valid <= 1;
+                    conv_valid <= 1; // 拉高 conv_valid
                     state <= CALC_NEXT;
                 end
 
@@ -192,14 +187,24 @@ module QuantizedConvReLU2d #(
                     // 更新列和行索引
                     if (col < INPUT_WIDTH - KERNEL_SIZE) begin
                         col <= col + 1;
+                        // 准备下一个计算
+                        bias_data_addr_read <= output_channel;
+                        state <= LOAD_BIAS;
                     end else begin
                         col <= 0;
                         if (row < INPUT_HEIGHT - KERNEL_SIZE) begin
                             row <= row + 1;
+                            // 准备下一个计算
+                            bias_data_addr_read <= output_channel;
+                            state <= LOAD_BIAS;
                         end else begin
                             row <= 0;
                             if (output_channel < OUTPUT_CHANNELS - 1) begin
                                 output_channel <= output_channel + 1;
+                                // 更新偏置读取地址
+                                bias_data_addr_read <= output_channel + 1;
+                                // 准备下一个计算
+                                state <= LOAD_BIAS;
                             end else begin
                                 // 所有计算完成
                                 processing <= 0;
@@ -208,17 +213,25 @@ module QuantizedConvReLU2d #(
                             end
                         end
                     end
-                    // 更新下一个输出通道的偏置地址
-                    bias_data_addr_read <= output_channel;
-                    // 准备下一个计算
-                    if (state != DONE) begin
-                        state <= LOAD_BIAS;
-                    end
                 end
 
                 DONE: begin
                     done <= 1;
-                    state <= IDLE;
+                    if (start) begin
+                        // 准备新的计算
+                        done <= 0;
+                        processing      <= 1;
+                        output_channel  <= 0;
+                        row             <= 0;
+                        col             <= 0;
+                        acc             <= 0;
+                        kernel_row      <= 0;
+                        kernel_col      <= 0;
+                        bias_data_addr_read <= 0;
+                        state           <= LOAD_BIAS;
+                    end else begin
+                        state <= IDLE;
+                    end
                 end
 
                 default: state <= IDLE;
