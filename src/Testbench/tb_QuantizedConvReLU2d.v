@@ -6,7 +6,7 @@ parameter KERNEL_SIZE     = 3;
 parameter INPUT_WIDTH     = 30; // 输入尺寸28，加上填充1*2
 parameter INPUT_HEIGHT    = 30;
 parameter real SCALE_FLOAT = 0.1675153225660324;
-parameter SCALE           = 32'd11226920; // 0.1675153225660324 * (1 << 26)
+parameter SCALE           = 32'd16177215; // 0.1675153225660324 * (1 << 26)
 parameter ZERO_POINT      = 8'd0;
 
 // 时钟和复位
@@ -48,6 +48,7 @@ QuantizedConvReLU2d #(
     .rstn              (rstn),
     .start             (start),
     .done              (done),
+    .processing        (processing),
     .input_data_in     (input_data_in),
     .input_data_we     (input_data_we),
     .input_data_addr   (input_data_addr),
@@ -106,8 +107,8 @@ initial begin
     rstn = 1;
     #10;
 
-    // 加载权重数据（只需加载一次）
     for (i = 0; i < OUTPUT_CHANNELS*INPUT_CHANNELS*KERNEL_SIZE*KERNEL_SIZE; i = i + 1) begin
+        @(posedge clk);
         weight_data_we = 1;
         weight_data_addr = i;
         weight_data_in = weights_mem[i];
@@ -158,6 +159,7 @@ initial begin
                 end
             end
 
+            output_index = 0;
             // 线程2：等待卷积完成
             begin
                 wait (done);

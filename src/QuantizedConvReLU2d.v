@@ -11,6 +11,7 @@ module QuantizedConvReLU2d #(
     input                               rstn,
     input                               start,
     output reg                          done,
+    output reg                          processing,
 
     // 输入特征图接口
     input       [7:0]                   input_data_in,
@@ -80,7 +81,6 @@ module QuantizedConvReLU2d #(
     reg [7:0]  kernel_row, kernel_col;
     reg [7:0]  output_channel;
     reg [31:0] acc;
-    reg        processing;
 
     // 状态机状态
     reg [2:0] state;
@@ -95,7 +95,9 @@ module QuantizedConvReLU2d #(
 
     // 缩放结果计算
     wire [31:0] scaled_result_temp;
-    assign scaled_result_temp = ((acc * SCALE) >> 26) + ZERO_POINT;
+    wire [64:0] scaled_multiply_temp;
+    assign scaled_multiply_temp = acc * SCALE;
+    assign scaled_result_temp = scaled_multiply_temp >> 26 + ZERO_POINT;
 
     always @(posedge clk or negedge rstn) begin
         if (!rstn) begin
@@ -126,7 +128,9 @@ module QuantizedConvReLU2d #(
                         kernel_col      <= 0;
                         bias_data_addr_read <= output_channel;
                         state           <= LOAD_BIAS;
-                    end
+                        input_data_addr_read <= 0;
+                        weight_data_addr_read <=0;
+                        end
                 end
 
                 LOAD_BIAS: begin
